@@ -1,32 +1,22 @@
-/*
- * Copyright 2014-2015 Quantiply Corporation. All rights reserved.
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
 define([
   'angular',
   'lodash',
-  'kbn',
+  'app/core/utils/datemath',
   'moment',
-  './queryCtrl',
 ],
-function (angular, _, kbn, moment) {
+function (angular, _, dateMath, moment) {
   'use strict';
 
-  var module = angular.module('grafana.services');
+  /** @ngInject */
+  function DruidDatasource(instanceSettings, $q, backendSrv, templateSrv, $http, $log) {
+    this.type = 'druid';
+    this.url = instanceSettings.url;
+    this.name = instanceSettings.name;
+    this.basicAuth = instanceSettings.basicAuth;
+    instanceSettings.jsonData = instanceSettings.jsonData || {};
+    this.supportMetrics = true;
 
-  module.factory('DruidDatasource', function($q, $http, templateSrv, $timeout, $log) {
-
+   //changes:druid start
     function replaceTemplateValues(obj, attrList) {
       var substitutedVals = attrList.map(function (attr) {
         return templateSrv.replace(obj[attr]);
@@ -45,49 +35,59 @@ function (angular, _, kbn, moment) {
     var filterTemplateExpanders = {
       "selector": _.partialRight(replaceTemplateValues, ['value']),
       "regex": _.partialRight(replaceTemplateValues, ['pattern']),
+      "javascript": _.partialRight(replaceTemplateValues, ['function']),
     };
 
-    function DruidDatasource(datasource) {
-      this.type = 'druid';
-      this.editorSrc = 'app/features/druid/partials/query.editor.html';
-      this.url = datasource.url;
-      this.supportMetrics = true;
-    }
+    this.testDatasource = function() {
+      return this._get('/druid/v2/datasources').then(function () {
+        return { status: "success", message: "Druid Data source is working", title: "Success" };
+      });
+    };
 
     //Get list of available datasources
-    DruidDatasource.prototype.getDataSources = function() {
-      return $http({method: 'GET', url: this.url + '/v2/datasources'}).then(function (response) {
+    this.getDataSources = function() {
+      return this._get('/druid/v2/datasources').then(function (response) {
         return response.data;
       });
-    }
+    };
 
-    /* Returns a promise which returns
-      {"dimensions":["page_url","ip_netspeed", ...],"metrics":["count", ...]}
-    */
-    DruidDatasource.prototype.getDimensionsAndMetrics = function (target, range) {
-      var datasource = target.datasource;
-      return $http({method: 'GET', url: this.url + '/v2/datasources/' + datasource}).then(function (response) {
+    this.getDimensionsAndMetrics = function (datasource) {
+      return this._get('/druid/v2/datasources/'+ datasource).then(function (response) {
         return response.data;
       });
-    }
-    
+    };
+
+    this._get = function(relativeUrl, params) {
+      return backendSrv.datasourceRequest({
+        method: 'GET',
+        url: this.url + relativeUrl,
+        params: params,
+      });
+    };
+
     // Called once per panel (graph)
-    DruidDatasource.prototype.query = function(options) {
+    this.query = function(options) {
       var dataSource = this;
-      var from = dateToMoment(options.range.from);
-      var to = dateToMoment(options.range.to);
+      var from = dateToMoment(options.range.from, false);
+      var to = dateToMoment(options.range.to, true);
 
       $log.debug("Do query");
       $log.debug(options);
 
       var promises = options.targets.map(function (target) {
+        if (_.isEmpty(target.druidDS) || (_.isEmpty(target.aggregators) && target.queryType !== "select")) {
+          console.log("target.druidDS: " + target.druidDS + ", target.aggregators: " + target.aggregators);
+          var d = $q.defer();
+          d.resolve([]);
+          return d.promise;
+        }
         var maxDataPointsByResolution = options.maxDataPoints;
         var maxDataPointsByConfig = target.maxDataPoints? target.maxDataPoints : Number.MAX_VALUE;
         var maxDataPoints = Math.min(maxDataPointsByResolution, maxDataPointsByConfig);
         var granularity = target.shouldOverrideGranularity? target.customGranularity : computeGranularity(from, to, maxDataPoints);
         //Round up to start of an interval
         //Width of bar chars in Grafana is determined by size of the smallest interval
-        var roundedFrom = roundUpStartTime(from, granularity);
+        var roundedFrom = granularity === "all" ? from : roundUpStartTime(from, granularity);
         return dataSource._doQuery(roundedFrom, to, granularity, target);
       });
 
@@ -96,8 +96,8 @@ function (angular, _, kbn, moment) {
       });
     };
 
-    DruidDatasource.prototype._doQuery = function (from, to, granularity, target) {
-      var datasource = target.datasource;
+    this._doQuery = function (from, to, granularity, target) {
+      var datasource = target.druidDS;
       var filters = target.filters;
       var aggregators = target.aggregators;
       var postAggregators = target.postAggregators;
@@ -107,9 +107,16 @@ function (angular, _, kbn, moment) {
       var intervals = getQueryIntervals(from, to);
       var promise = null;
 
+      var selectMetrics = target.selectMetrics;
+      var selectDimensions = target.selectDimensions;
+      var selectThreshold = target.selectThreshold;
+      if(!selectThreshold) {
+        selectThreshold = 5;
+      }
+
       if (target.queryType === 'topN') {
         var threshold = target.limit;
-        var metric = target.metric;
+        var metric = target.druidMetric;
         var dimension = target.dimension;
         promise = this._topNQuery(datasource, intervals, granularity, filters, aggregators, postAggregators, threshold, metric, dimension)
           .then(function(response) {
@@ -117,13 +124,17 @@ function (angular, _, kbn, moment) {
           });
       }
       else if (target.queryType === 'groupBy') {
-        if (target.hasLimit) {
-          limitSpec = getLimitSpec(target.limit, target.orderBy); 
-        }
+        limitSpec = getLimitSpec(target.limit, target.orderBy);
         promise = this._groupByQuery(datasource, intervals, granularity, filters, aggregators, postAggregators, groupBy, limitSpec)
           .then(function(response) {
             return convertGroupByData(response.data, groupBy, metricNames);
           });
+      }
+      else if (target.queryType === 'select') {
+        promise = this._selectQuery(datasource, intervals, granularity, selectDimensions, selectMetrics, filters, selectThreshold);
+        return promise.then(function(response) {
+          return convertSelectData(response.data);
+        });
       }
       else {
         promise = this._timeSeriesQuery(datasource, intervals, granularity, filters, aggregators, postAggregators)
@@ -143,14 +154,14 @@ function (angular, _, kbn, moment) {
         },
         ...
       ]
-      
+
       Druid calculates metrics based on the intervals specified in the query but returns a timestamp rounded down.
       We need to adjust the first timestamp in each time series
       */
       return promise.then(function (metrics) {
         var fromMs = formatTimestamp(from);
         metrics.forEach(function (metric) {
-          if (metric.datapoints[0][1] < fromMs) {
+          if (!_.isEmpty(metric.datapoints[0]) && metric.datapoints[0][1] < fromMs) {
             metric.datapoints[0][1] = fromMs;
           }
         });
@@ -158,7 +169,25 @@ function (angular, _, kbn, moment) {
       });
     };
 
-    DruidDatasource.prototype._timeSeriesQuery = function (datasource, intervals, granularity, filters, aggregators, postAggregators) {
+    this._selectQuery = function (datasource, intervals, granularity, dimension, metric, filters, selectThreshold) {
+      var query = {
+        "queryType": "select",
+        "dataSource": datasource,
+        "granularity": granularity,
+        "pagingSpec": {"pagingIdentifiers": {}, "threshold": selectThreshold},
+        "dimensions": dimension,
+        "metrics": metric,
+        "intervals": intervals
+      };
+
+      if (filters && filters.length > 0) {
+        query.filter = buildFilterTree(filters);
+      }
+
+      return this._druidQuery(query);
+    };
+
+    this._timeSeriesQuery = function (datasource, intervals, granularity, filters, aggregators, postAggregators) {
       var query = {
         "queryType": "timeseries",
         "dataSource": datasource,
@@ -175,7 +204,8 @@ function (angular, _, kbn, moment) {
       return this._druidQuery(query);
     };
 
-    DruidDatasource.prototype._topNQuery = function (datasource, intervals, granularity, filters, aggregators, postAggregators, threshold, metric, dimension) {
+    this._topNQuery = function (datasource, intervals, granularity, filters, aggregators, postAggregators,
+    threshold, metric, dimension) {
       var query = {
         "queryType": "topN",
         "dataSource": datasource,
@@ -196,7 +226,8 @@ function (angular, _, kbn, moment) {
       return this._druidQuery(query);
     };
 
-    DruidDatasource.prototype._groupByQuery = function (datasource, intervals, granularity, filters, aggregators, postAggregators, groupBy, limitSpec) {
+    this._groupByQuery = function (datasource, intervals, granularity, filters, aggregators, postAggregators,
+    groupBy, limitSpec) {
       var query = {
         "queryType": "groupBy",
         "dataSource": datasource,
@@ -215,13 +246,13 @@ function (angular, _, kbn, moment) {
       return this._druidQuery(query);
     };
 
-    DruidDatasource.prototype._druidQuery = function (query) {
+    this._druidQuery = function (query) {
       var options = {
         method: 'POST',
-        url: this.url + '/v2/',
+        url: this.url + '/druid/v2/?pretty',
         data: query
       };
-        $log.debug("Make http request")
+      $log.debug("Make http request");
       $log.debug(options);
       return $http(options);
     };
@@ -230,7 +261,7 @@ function (angular, _, kbn, moment) {
       return {
         "type": "default",
         "limit": limitNum,
-        "columns": orderBy.map(function (col) {
+        "columns": !orderBy? null: orderBy.map(function (col) {
           return {"dimension": col, "direction": "DESCENDING"};
         })
       };
@@ -272,7 +303,7 @@ function (angular, _, kbn, moment) {
     }
 
     function formatTimestamp(ts) {
-      return moment(ts).format('X')*1000
+      return moment(ts).format('X')*1000;
     }
 
     function convertTimeSeriesData(md, metrics) {
@@ -317,22 +348,22 @@ function (angular, _, kbn, moment) {
           ...
         ]
       */
-      
+
       /*
         First, we need make sure that the result for each
         timestamp contains entries for all distinct dimension values
         in the entire list of results.
-      
+
         Otherwise, if we do a stacked bar chart, Grafana doesn't sum
         the metrics correctly.
       */
-      
+
       //Get the list of all distinct dimension values for the entire result set
       var dVals = md.reduce(function (dValsSoFar, tsItem) {
         var dValsForTs = _.pluck(tsItem.result, dimension);
         return _.union(dValsSoFar, dValsForTs);
       }, {});
-      
+
       //Add null for the metric for any missing dimension values per timestamp result
       md.forEach(function (tsItem) {
         var dValsPresent = _.pluck(tsItem.result, dimension);
@@ -362,11 +393,11 @@ function (angular, _, kbn, moment) {
                 "d2": [mv4, ts2]
               },
               ...
-            ]        
+            ]
         */
         var timestamp = formatTimestamp(item.timestamp);
         var keys = _.pluck(item.result, dimension);
-        var vals = _.pluck(item.result, metric).map(function (val) { return [val, timestamp]});
+        var vals = _.pluck(item.result, metric).map(function (val) { return [val, timestamp];});
         return _.zipObject(keys, vals);
       })
       .reduce(function (prev, curr) {
@@ -449,11 +480,35 @@ function (angular, _, kbn, moment) {
       });
     }
 
-    function dateToMoment(date) {
+    function convertSelectData(data){
+      var resultList = _.pluck(data, "result");
+      var eventsList = _.pluck(resultList, "events");
+      var eventList = _.flatten(eventsList);
+      var result = {};
+      for(var i = 0; i < eventList.length; i++){
+        var event = eventList[i].event;
+        var timestamp = event.timestamp;
+        if(_.isEmpty(timestamp)) {
+          continue;
+        }
+        for(var key in event) {
+          if(key !== "timestamp") {
+            if(!result[key]){
+              result[key] = {"target":key, "datapoints":[]};
+            }
+            result[key].datapoints.push([event[key], timestamp]);
+          }
+        }
+      }
+      return _.values(result);
+    }
+
+    function dateToMoment(date, roundUp) {
       if (date === 'now') {
         return moment();
       }
-      return moment(kbn.parseDate(date));
+      date = dateMath.parse(date, roundUp);
+      return moment(date.valueOf());
     }
 
     function computeGranularity(from, to, maxDataPoints) {
@@ -465,11 +520,12 @@ function (angular, _, kbn, moment) {
       var granularityEntry = _.find(GRANULARITIES, function(gEntry) {
         return Math.ceil(intervalSecs/gEntry[1].asSeconds()) <= maxDataPoints;
       });
-      
-      $log.debug("Calculated \"" + granularityEntry[0]  +  "\" granularity [" + Math.ceil(intervalSecs/granularityEntry[1].asSeconds()) + " pts]" + " for " + (intervalSecs/60).toFixed(0) + " minutes and max of " + maxDataPoints + " data points");
+
+      $log.debug("Calculated \"" + granularityEntry[0]  +  "\" granularity [" + Math.ceil(intervalSecs/granularityEntry[1].asSeconds()) +
+      " pts]" + " for " + (intervalSecs/60).toFixed(0) + " minutes and max of " + maxDataPoints + " data points");
       return granularityEntry[0];
     }
-    
+
     function roundUpStartTime(from, granularity) {
       var duration = _.find(GRANULARITIES, function (gEntry) {
         return gEntry[0] === granularity;
@@ -479,7 +535,9 @@ function (angular, _, kbn, moment) {
       return rounded;
     }
 
-    return DruidDatasource;
-  });
-
+   //changes druid end
+  }
+  return {
+    DruidDatasource: DruidDatasource
+  };
 });
