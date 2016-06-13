@@ -23,7 +23,7 @@ function (angular, _, dateMath, moment) {
   'use strict';
 
   /** @ngInject */
-  function DruidDatasource(instanceSettings, $q, backendSrv, templateSrv, $http, $log) {
+  function DruidDatasource(instanceSettings, $q, backendSrv, templateSrv) {
     this.type = 'druid';
     this.url = instanceSettings.url;
     this.name = instanceSettings.name;
@@ -86,8 +86,8 @@ function (angular, _, dateMath, moment) {
       var from = dateToMoment(options.range.from, false);
       var to = dateToMoment(options.range.to, true);
 
-      $log.debug("Do query");
-      $log.debug(options);
+      console.log("Do query");
+      console.log(options);
 
       var promises = options.targets.map(function (target) {
         if (_.isEmpty(target.druidDS) || (_.isEmpty(target.aggregators) && target.queryType !== "select")) {
@@ -267,9 +267,9 @@ function (angular, _, dateMath, moment) {
         url: this.url + '/druid/v2/?pretty',
         data: query
       };
-      $log.debug("Make http request");
-      $log.debug(options);
-      return $http(options);
+      console.log("Make http request");
+      console.log(options);
+      return backendSrv.datasourceRequest(options);
     };
 
     function getLimitSpec(limitNum, orderBy) {
@@ -536,7 +536,7 @@ function (angular, _, dateMath, moment) {
         return Math.ceil(intervalSecs/gEntry[1].asSeconds()) <= maxDataPoints;
       });
 
-      $log.debug("Calculated \"" + granularityEntry[0]  +  "\" granularity [" + Math.ceil(intervalSecs/granularityEntry[1].asSeconds()) +
+      console.log("Calculated \"" + granularityEntry[0]  +  "\" granularity [" + Math.ceil(intervalSecs/granularityEntry[1].asSeconds()) +
       " pts]" + " for " + (intervalSecs/60).toFixed(0) + " minutes and max of " + maxDataPoints + " data points");
       return granularityEntry[0];
     }
@@ -546,7 +546,7 @@ function (angular, _, dateMath, moment) {
         return gEntry[0] === granularity;
       })[1];
       var rounded = moment(Math.ceil((+from)/(+duration)) * (+duration));
-      $log.debug("Rounding up start time from " + from.format() + " to " + rounded.format() + " for granularity [" + granularity + "]");
+      console.log("Rounding up start time from " + from.format() + " to " + rounded.format() + " for granularity [" + granularity + "]");
       return rounded;
     }
 

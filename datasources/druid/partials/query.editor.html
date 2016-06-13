@@ -81,7 +81,7 @@
                     <label class="gf-form-label query-keyword width-8">
                         Group By
                     </label>
-                    <input type="text" class="gf-form-input input-medium" ng-model="ctrl.target.groupBy" spellcheck='false' placeholder="dim1,dim2" bs-typeahead="ctrl.groupBy" data-min-length=0 ng-blur="ctrl.targetBlur()" />
+                    <input type="text" class="gf-form-input input-medium" ng-model="ctrl.target.groupBy" spellcheck='false' placeholder="dim1,dim2" bs-typeahead="ctrl.getDimensions" data-min-length=0 ng-blur="ctrl.targetBlur()" />
                     <label class="gf-form-label" bs-tooltip="ctrl.target.errors.groupBy" style="color: rgb(229, 189, 28)" ng-show="ctrl.target.errors.groupBy">
                         <i class="fa fa-warning"></i>
                     </label>
@@ -95,7 +95,7 @@
                     <label class="gf-form-label query-keyword width-8">
                         Order By
                     </label>
-                    <input type="number" required class="gf-form-input input-small" ng-model="ctrl.target.orderBy" spellcheck='false' placeholder="col1,col2" bs-typeahead="ctrl.getDimensions" ng-blur="ctrl.targetBlur()" />
+                    <input type="text" required class="gf-form-input input-medium" ng-model="ctrl.target.orderBy" spellcheck='false' placeholder="col1,col2" bs-typeahead="ctrl.getDimensions" ng-blur="ctrl.targetBlur()" />
                     <label class="gf-form-label" bs-tooltip="ctrl.target.errors.getDimensions" style="color: rgb(229, 189, 28)" ng-show="ctrl.target.errors.getDimensions">
                         <i class="fa fa-warning"></i>
                     </label>
