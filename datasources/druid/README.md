@@ -2,7 +2,7 @@ Grafana plugin for [Druid](http://druid.io/) real-time OLAP database works for G
 
 ## Configuration
 
-Add new Druid Datasource with url to Druid broker instance. For example http://druid.internal/
+Add new Druid Datasource with url to Druid broker instance. For example http://druid.internal
 
 ## Status
 
